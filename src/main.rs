@@ -104,6 +104,44 @@ async fn sync_sheet(
         );
     let hub = Sheets::new(client, auth);
 
+    // Check if the sheet exists
+    let spreadsheet = hub.spreadsheets().get(spreadsheet_id).doit().await?.1;
+    let sheet_exists = spreadsheet
+        .sheets
+        .as_ref()
+        .map(|sheets| {
+            sheets.iter().any(|s| {
+                s.properties
+                    .as_ref()
+                    .map_or(false, |p| p.title.as_deref() == Some(GOOGLE_SHEET_NAME))
+            })
+        })
+        .unwrap_or(false);
+
+    if !sheet_exists {
+        println!("Sheet '{}' not found. Creating it...", GOOGLE_SHEET_NAME);
+        let req = google_sheets4::api::BatchUpdateSpreadsheetRequest {
+            requests: Some(vec![google_sheets4::api::Request {
+                add_sheet: Some(google_sheets4::api::AddSheetRequest {
+                    properties: Some(google_sheets4::api::SheetProperties {
+                        title: Some(GOOGLE_SHEET_NAME.to_string()),
+                        ..Default::default()
+                    }),
+                }),
+                ..Default::default()
+            }]),
+            include_spreadsheet_in_response: Some(false),
+            response_ranges: None,
+            response_include_grid_data: Some(false),
+        };
+
+        hub.spreadsheets()
+            .batch_update(req, spreadsheet_id)
+            .doit()
+            .await?;
+        println!("Sheet '{}' created.", GOOGLE_SHEET_NAME);
+    }
+
     // 2. Read existing data
     // We use UNFORMATTED_VALUE to get numbers for dates if they are already in serial format
     let range = format!("'{}'!A:F", GOOGLE_SHEET_NAME);
