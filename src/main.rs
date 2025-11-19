@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use dotenv::dotenv;
 use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Sheets};
 use serde::Deserialize;
@@ -57,6 +57,16 @@ async fn fetch_toggl_entries(
 
 // --- Google Sheets Logic ---
 
+// Helper to convert DateTime<Utc> to Google Sheets serial number (days since Dec 30, 1899)
+fn to_serial_number(t: DateTime<Utc>) -> f64 {
+    let epoch = NaiveDateTime::parse_from_str("1899-12-30 00:00:00", "%Y-%m-%d %H:%M:%S")
+        .unwrap()
+        .and_utc();
+    let duration = t.signed_duration_since(epoch);
+    // Days + fraction of day
+    duration.num_milliseconds() as f64 / 86_400_000.0
+}
+
 async fn sync_sheet(
     spreadsheet_id: &str,
     new_entries: Vec<TogglTimeEntry>,
@@ -89,10 +99,12 @@ async fn sync_sheet(
     let hub = Sheets::new(client, auth);
 
     // 2. Read existing data
+    // We use UNFORMATTED_VALUE to get numbers for dates if they are already in serial format
     let range = "Sheet1!A:F";
     let result = hub
         .spreadsheets()
         .values_get(spreadsheet_id, range)
+        .value_render_option("UNFORMATTED_VALUE")
         .doit()
         .await;
 
@@ -104,12 +116,21 @@ async fn sync_sheet(
             for row in rows {
                 // Try to parse the date from the first column (index 0)
                 let should_keep = if let Some(date_val) = row.get(0) {
-                    if let Some(date_str) = date_val.as_str() {
-                        // Try parsing with default to_string format first, then RFC3339
-                        // The previous code used entry.start.to_string() which is usually "%Y-%m-%d %H:%M:%S %Z"
-                        // But chrono's default Display might vary.
-                        // Let's try a few common formats.
-
+                    // Case A: It's a number (Serial Number)
+                    if let Some(serial) = date_val.as_f64() {
+                        let epoch = NaiveDateTime::parse_from_str(
+                            "1899-12-30 00:00:00",
+                            "%Y-%m-%d %H:%M:%S",
+                        )
+                        .unwrap()
+                        .and_utc();
+                        // Convert serial back to duration
+                        let millis = (serial * 86_400_000.0) as i64;
+                        let dt = epoch + Duration::milliseconds(millis);
+                        dt < cutoff_date
+                    }
+                    // Case B: It's a string (Legacy format)
+                    else if let Some(date_str) = date_val.as_str() {
                         // Attempt 1: RFC3339 (standard)
                         if let Ok(dt) = DateTime::parse_from_rfc3339(date_str) {
                             dt.with_timezone(&Utc) < cutoff_date
@@ -126,11 +147,11 @@ async fn sync_sheet(
                         {
                             ndt.and_utc() < cutoff_date
                         } else {
-                            // Could not parse date, keep the row (safe default, e.g. header)
+                            // Could not parse date string, keep the row (safe default)
                             true
                         }
                     } else {
-                        true // Not a string, keep it
+                        true // Unknown type, keep it
                     }
                 } else {
                     true // Empty row or no first col, keep it
@@ -149,20 +170,22 @@ async fn sync_sheet(
     let mut new_rows: Vec<Vec<serde_json::Value>> = Vec::new();
     for entry in new_entries {
         let duration_mins = entry.duration as f64 / 60.0;
-        let stop_time = match entry.stop {
-            Some(t) => t.to_rfc3339(),
-            None => "Running".to_string(),
+
+        let stop_val = match entry.stop {
+            Some(t) => serde_json::json!(to_serial_number(t)),
+            None => serde_json::json!("Running"),
         };
+
         let tags_str = entry.tags.unwrap_or_default().join(", ");
 
-        // Use RFC3339 for new entries for better machine readability
+        // Use Serial Number for start time
         let row = vec![
-            serde_json::json!(entry.start.to_rfc3339()),
+            serde_json::json!(to_serial_number(entry.start)),
             serde_json::json!(entry.description.unwrap_or_default()),
             serde_json::json!(duration_mins),
             serde_json::json!(entry.project_id.unwrap_or_default().to_string()),
             serde_json::json!(tags_str),
-            serde_json::json!(stop_time),
+            stop_val,
         ];
         new_rows.push(row);
     }
@@ -189,7 +212,7 @@ async fn sync_sheet(
 
         hub.spreadsheets()
             .values_update(req, spreadsheet_id, "Sheet1!A1")
-            .value_input_option("USER_ENTERED")
+            .value_input_option("USER_ENTERED") // Important for Sheets to recognize numbers as potential dates
             .doit()
             .await?;
         println!("Successfully synced data to Google Sheet.");
@@ -225,4 +248,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
     sync_sheet(&spreadsheet_id, entries, start_date).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn test_serial_number_conversion() {
+        let to_utc = |y, m, d, h, min, s| {
+            NaiveDate::from_ymd_opt(y, m, d)
+                .unwrap()
+                .and_hms_opt(h, min, s)
+                .unwrap()
+                .and_utc()
+        };
+
+        // 1899-12-30 is 0.0
+        assert!(
+            (to_serial_number(to_utc(1899, 12, 30, 0, 0, 0)) - 0.0).abs() < 1e-6,
+            "1899-12-30 should be 0.0"
+        );
+
+        // 1900-01-01 is 2.0
+        assert!(
+            (to_serial_number(to_utc(1900, 1, 1, 0, 0, 0)) - 2.0).abs() < 1e-6,
+            "1900-01-01 should be 2.0"
+        );
+
+        // 1900-01-01 12:00:00 is 2.5
+        assert!(
+            (to_serial_number(to_utc(1900, 1, 1, 12, 0, 0)) - 2.5).abs() < 1e-6,
+            "1900-01-01 noon should be 2.5"
+        );
+
+        // Unix Epoch: 1970-01-01 is 25569.0
+        assert!(
+            (to_serial_number(to_utc(1970, 1, 1, 0, 0, 0)) - 25569.0).abs() < 1e-6,
+            "1970-01-01 should be 25569.0"
+        );
+    }
 }
