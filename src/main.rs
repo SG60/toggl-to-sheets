@@ -168,7 +168,7 @@ async fn sync_sheet(
             println!("Read {} existing rows from Sheet.", rows.len());
             for row in rows {
                 // Check if it's a header row
-                if let Some(first_col) = row.get(0) {
+                if let Some(first_col) = row.first() {
                     if let Some(s) = first_col.as_str() {
                         if s == "Start" {
                             continue; // Skip header
@@ -177,7 +177,7 @@ async fn sync_sheet(
                 }
 
                 // Try to parse the date from the first column (index 0)
-                let should_keep = if let Some(date_val) = row.get(0) {
+                let should_keep = if let Some(date_val) = row.first() {
                     // Case A: It's a number (Serial Number)
                     if let Some(serial) = date_val.as_f64() {
                         let epoch = NaiveDateTime::parse_from_str(
