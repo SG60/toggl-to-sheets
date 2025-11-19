@@ -109,11 +109,28 @@ async fn sync_sheet(
         .await;
 
     let mut kept_rows: Vec<Vec<serde_json::Value>> = Vec::new();
+    let header_row = vec![
+        serde_json::json!("Start"),
+        serde_json::json!("Description"),
+        serde_json::json!("Duration (m)"),
+        serde_json::json!("Project"),
+        serde_json::json!("Tags"),
+        serde_json::json!("Stop"),
+    ];
 
     if let Ok((_, value_range)) = result {
         if let Some(rows) = value_range.values {
             println!("Read {} existing rows from Sheet.", rows.len());
             for row in rows {
+                // Check if it's a header row
+                if let Some(first_col) = row.get(0) {
+                    if let Some(s) = first_col.as_str() {
+                        if s == "Start" {
+                            continue; // Skip header
+                        }
+                    }
+                }
+
                 // Try to parse the date from the first column (index 0)
                 let should_keep = if let Some(date_val) = row.get(0) {
                     // Case A: It's a number (Serial Number)
@@ -193,7 +210,10 @@ async fn sync_sheet(
     println!("Adding {} new entries.", new_rows.len());
 
     // 4. Combine Rows
-    kept_rows.append(&mut new_rows);
+    // Start with Header
+    let mut all_rows = vec![header_row];
+    all_rows.append(&mut kept_rows);
+    all_rows.append(&mut new_rows);
 
     // 5. Clear Sheet
     // We clear everything to ensure no stale data remains if the total row count decreases
@@ -204,9 +224,9 @@ async fn sync_sheet(
         .await?;
 
     // 6. Write All Data
-    if !kept_rows.is_empty() {
+    if !all_rows.is_empty() {
         let req = ValueRange {
-            values: Some(kept_rows),
+            values: Some(all_rows),
             ..Default::default()
         };
 
