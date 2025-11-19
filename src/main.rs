@@ -7,16 +7,18 @@ use std::error::Error;
 
 // --- Data Structures ---
 
-// Represents a Time Entry from Toggl's API (v9)
+/// Represents a Time Entry from Toggl's API (v9)
 #[derive(Debug, Deserialize)]
 struct TogglTimeEntry {
     #[allow(dead_code)]
+    /// toggl time entry unique id
     id: i64,
     description: Option<String>,
     start: DateTime<Utc>,
     stop: Option<DateTime<Utc>>,
     duration: i64,
     project_id: Option<i64>,
+    project_name: Option<serde_json::Value>,
     tags: Option<Vec<String>>,
 }
 
@@ -40,6 +42,8 @@ async fn fetch_toggl_entries(
         .query(&[
             ("start_date", start_date.to_rfc3339()),
             ("end_date", end_date.to_rfc3339()),
+            // include meta entity data in the response (e.g. project_name etc.)
+            ("meta", "true".to_string()),
         ])
         .send()
         .await?;
@@ -113,7 +117,8 @@ async fn sync_sheet(
         serde_json::json!("Start"),
         serde_json::json!("Description"),
         serde_json::json!("Duration (m)"),
-        serde_json::json!("Project"),
+        serde_json::json!("Project ID"),
+        serde_json::json!("Project Name"),
         serde_json::json!("Tags"),
         serde_json::json!("Stop"),
     ];
@@ -198,9 +203,10 @@ async fn sync_sheet(
         // Use Serial Number for start time
         let row = vec![
             serde_json::json!(to_serial_number(entry.start)),
-            serde_json::json!(entry.description.unwrap_or_default()),
+            serde_json::json!(entry.description.unwrap_or("".into())),
             serde_json::json!(duration_mins),
-            serde_json::json!(entry.project_id.unwrap_or_default().to_string()),
+            serde_json::json!(entry.project_id.map_or("".into(), |id| id.to_string())),
+            serde_json::json!(entry.project_name.unwrap_or("".into())),
             serde_json::json!(tags_str),
             stop_val,
         ];
