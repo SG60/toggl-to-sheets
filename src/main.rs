@@ -71,6 +71,8 @@ fn to_serial_number(t: DateTime<Utc>) -> f64 {
     duration.num_milliseconds() as f64 / 86_400_000.0
 }
 
+const GOOGLE_SHEET_NAME: &str = "toggl_entries";
+
 async fn sync_sheet(
     spreadsheet_id: &str,
     new_entries: Vec<TogglTimeEntry>,
@@ -104,10 +106,10 @@ async fn sync_sheet(
 
     // 2. Read existing data
     // We use UNFORMATTED_VALUE to get numbers for dates if they are already in serial format
-    let range = "Sheet1!A:F";
+    let range = format!("'{}'!A:F", GOOGLE_SHEET_NAME);
     let result = hub
         .spreadsheets()
-        .values_get(spreadsheet_id, range)
+        .values_get(spreadsheet_id, &range)
         .value_render_option("UNFORMATTED_VALUE")
         .doit()
         .await;
@@ -225,7 +227,11 @@ async fn sync_sheet(
     // We clear everything to ensure no stale data remains if the total row count decreases
     let clear_req = google_sheets4::api::ClearValuesRequest::default();
     hub.spreadsheets()
-        .values_clear(clear_req, spreadsheet_id, "Sheet1!A:F")
+        .values_clear(
+            clear_req,
+            spreadsheet_id,
+            &format!("'{}'!A:F", GOOGLE_SHEET_NAME),
+        )
         .doit()
         .await?;
 
@@ -237,7 +243,7 @@ async fn sync_sheet(
         };
 
         hub.spreadsheets()
-            .values_update(req, spreadsheet_id, "Sheet1!A1")
+            .values_update(req, spreadsheet_id, &format!("'{}'!A1", GOOGLE_SHEET_NAME))
             .value_input_option("USER_ENTERED") // Important for Sheets to recognize numbers as potential dates
             .doit()
             .await?;
