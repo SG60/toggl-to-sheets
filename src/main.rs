@@ -1,10 +1,9 @@
 use chrono::{DateTime, Utc};
 use dotenv::dotenv;
-use google_sheets4::{api::ValueRange, Sheets};
+use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Sheets};
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
-use yup_oauth2::ServiceAccountAuthenticator;
 
 // --- Data Structures ---
 
@@ -28,7 +27,7 @@ async fn fetch_toggl_entries(
     end_date: DateTime<Utc>,
 ) -> Result<Vec<TogglTimeEntry>, Box<dyn Error>> {
     let client = reqwest::Client::new();
-    
+
     // Toggl v9 API Endpoint for "me/time_entries"
     let url = "https://api.track.toggl.com/api/v9/me/time_entries";
 
@@ -66,18 +65,32 @@ async fn append_to_sheet(
         return Ok(());
     }
 
-    // Load Service Account Key
-    // Ensure 'service_account.json' is in your project root
-    let creds = yup_oauth2::read_service_account_key("service_account.json")
-        .await
-        .expect("Failed to read service_account.json");
+    // Get an ApplicationSecret instance by some means. It contains the `client_id` and
+    // `client_secret`, among other things.
+    let secret: yup_oauth2::ApplicationSecret = Default::default();
+    // Instantiate the authenticator. It will choose a suitable authentication flow for you,
+    // unless you replace  `None` with the desired Flow.
+    // Provide your own `AuthenticatorDelegate` to adjust the way it operates and get feedback about
+    // what's going on. You probably want to bring in your own `TokenStorage` to persist tokens and
+    // retrieve them from storage.
+    let auth = yup_oauth2::InstalledFlowAuthenticator::builder(
+        secret,
+        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+    )
+    .build()
+    .await
+    .unwrap();
 
-    let auth = ServiceAccountAuthenticator::builder(creds)
-        .build()
-        .await
-        .expect("Failed to create authenticator");
-
-    let hub = Sheets::new(hyper::Client::builder().build(hyper_rustls::HttpsConnectorBuilder::new().with_native_roots().https_or_http().enable_http1().build()), auth);
+    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build(
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .unwrap()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+        );
+    let hub = Sheets::new(client, auth);
 
     // Transform Toggl entries into Rows (Vector of Strings)
     let mut values: Vec<Vec<serde_json::Value>> = Vec::new();
@@ -85,7 +98,7 @@ async fn append_to_sheet(
     for entry in entries {
         // Calculate duration in minutes (Toggl sends seconds)
         let duration_mins = entry.duration as f64 / 60.0;
-        
+
         // Handle Optional Stop time
         let stop_time = match entry.stop {
             Some(t) => t.to_rfc3339(),
@@ -100,8 +113,8 @@ async fn append_to_sheet(
             serde_json::json!(entry.description.unwrap_or_default()), // Column B: Description
             serde_json::json!(duration_mins),           // Column C: Duration (mins)
             serde_json::json!(entry.project_id.unwrap_or_default().to_string()), // Column D: Project ID
-            serde_json::json!(tags_str),                // Column E: Tags
-            serde_json::json!(stop_time),               // Column F: Stop Time
+            serde_json::json!(tags_str),                                         // Column E: Tags
+            serde_json::json!(stop_time), // Column F: Stop Time
         ];
         values.push(row);
     }
@@ -112,8 +125,8 @@ async fn append_to_sheet(
     };
 
     // "Sheet1!A1" tells Google to look at Sheet1 and append after the last data found
-    let range = "Sheet1!A1"; 
-    
+    let range = "Sheet1!A1";
+
     let result = hub
         .spreadsheets()
         .values_append(req, spreadsheet_id, range)
