@@ -71,6 +71,26 @@ fn to_serial_number(t: DateTime<Utc>) -> f64 {
     duration.num_milliseconds() as f64 / 86_400_000.0
 }
 
+fn extract_time_from_row(row: &[serde_json::Value]) -> f64 {
+    if let Some(val) = row.first() {
+        if let Some(serial) = val.as_f64() {
+            return serial;
+        }
+        if let Some(s) = val.as_str() {
+            if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+                return to_serial_number(dt.with_timezone(&Utc));
+            }
+            if let Ok(ndt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S UTC") {
+                return to_serial_number(ndt.and_utc());
+            }
+            if let Ok(ndt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                return to_serial_number(ndt.and_utc());
+            }
+        }
+    }
+    0.0
+}
+
 const GOOGLE_SHEET_NAME: &str = "toggl_entries";
 
 async fn sync_sheet(
@@ -255,11 +275,20 @@ async fn sync_sheet(
 
     println!("Adding {} new entries.", new_rows.len());
 
-    // 4. Combine Rows
-    // Start with Header
+    // 4. Combine and Sort Rows
+    let mut data_rows = kept_rows;
+    data_rows.append(&mut new_rows);
+
+    data_rows.sort_by(|a, b| {
+        let time_a = extract_time_from_row(a);
+        let time_b = extract_time_from_row(b);
+        time_a
+            .partial_cmp(&time_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     let mut all_rows = vec![header_row];
-    all_rows.append(&mut kept_rows);
-    all_rows.append(&mut new_rows);
+    all_rows.append(&mut data_rows);
 
     // 5. Clear Sheet
     // We clear everything to ensure no stale data remains if the total row count decreases
@@ -358,5 +387,35 @@ mod tests {
             (to_serial_number(to_utc(1970, 1, 1, 0, 0, 0)) - 25569.0).abs() < 1e-6,
             "1970-01-01 should be 25569.0"
         );
+    }
+    #[test]
+    fn test_extract_time_from_row() {
+        // 1. Serial Number (f64)
+        let row_serial = vec![serde_json::json!(25569.0)]; // 1970-01-01
+        assert!((extract_time_from_row(&row_serial) - 25569.0).abs() < 1e-6);
+
+        // 2. RFC3339 String
+        let row_rfc3339 = vec![serde_json::json!("1970-01-01T00:00:00+00:00")];
+        assert!((extract_time_from_row(&row_rfc3339) - 25569.0).abs() < 1e-6);
+
+        // 3. "YYYY-MM-DD HH:MM:SS UTC" String
+        let row_utc_suffix = vec![serde_json::json!("1970-01-01 00:00:00 UTC")];
+        assert!((extract_time_from_row(&row_utc_suffix) - 25569.0).abs() < 1e-6);
+
+        // 4. "YYYY-MM-DD HH:MM:SS" String
+        let row_no_suffix = vec![serde_json::json!("1970-01-01 00:00:00")];
+        assert!((extract_time_from_row(&row_no_suffix) - 25569.0).abs() < 1e-6);
+
+        // 5. Invalid String
+        let row_invalid = vec![serde_json::json!("invalid-date")];
+        assert_eq!(extract_time_from_row(&row_invalid), 0.0);
+
+        // 6. Empty Row
+        let row_empty: Vec<serde_json::Value> = vec![];
+        assert_eq!(extract_time_from_row(&row_empty), 0.0);
+
+        // 7. Non-date first column
+        let row_other = vec![serde_json::json!(true)];
+        assert_eq!(extract_time_from_row(&row_other), 0.0);
     }
 }
