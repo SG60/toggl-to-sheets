@@ -67,7 +67,10 @@ async fn append_to_sheet(
 
     // Get an ApplicationSecret instance by some means. It contains the `client_id` and
     // `client_secret`, among other things.
-    let secret: yup_oauth2::ApplicationSecret = Default::default();
+    let secret: yup_oauth2::ApplicationSecret =
+        yup_oauth2::read_application_secret("google_clientsecret.json")
+            .await
+            .expect("google_clientsecret.json");
     // Instantiate the authenticator. It will choose a suitable authentication flow for you,
     // unless you replace  `None` with the desired Flow.
     // Provide your own `AuthenticatorDelegate` to adjust the way it operates and get feedback about
@@ -77,6 +80,7 @@ async fn append_to_sheet(
         secret,
         yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
     )
+    .persist_tokens_to_disk("google_tokencache.json")
     .build()
     .await
     .unwrap();

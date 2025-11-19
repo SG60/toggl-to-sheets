@@ -1,3 +1,7 @@
 /target
 **.env*
 !**.env.example
+
+# oauth2 secrets for google apis
+*clientsecret.json
+*tokencache.json
