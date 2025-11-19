@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use dotenv::dotenv;
 use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Sheets};
 use serde::Deserialize;
@@ -10,6 +10,7 @@ use std::error::Error;
 // Represents a Time Entry from Toggl's API (v9)
 #[derive(Debug, Deserialize)]
 struct TogglTimeEntry {
+    #[allow(dead_code)]
     id: i64,
     description: Option<String>,
     start: DateTime<Utc>,
@@ -56,26 +57,17 @@ async fn fetch_toggl_entries(
 
 // --- Google Sheets Logic ---
 
-async fn append_to_sheet(
+async fn sync_sheet(
     spreadsheet_id: &str,
-    entries: Vec<TogglTimeEntry>,
+    new_entries: Vec<TogglTimeEntry>,
+    cutoff_date: DateTime<Utc>,
 ) -> Result<(), Box<dyn Error>> {
-    if entries.is_empty() {
-        println!("No entries to upload.");
-        return Ok(());
-    }
-
-    // Get an ApplicationSecret instance by some means. It contains the `client_id` and
-    // `client_secret`, among other things.
+    // 1. Authenticate
     let secret: yup_oauth2::ApplicationSecret =
         yup_oauth2::read_application_secret("google_clientsecret.json")
             .await
             .expect("google_clientsecret.json");
-    // Instantiate the authenticator. It will choose a suitable authentication flow for you,
-    // unless you replace  `None` with the desired Flow.
-    // Provide your own `AuthenticatorDelegate` to adjust the way it operates and get feedback about
-    // what's going on. You probably want to bring in your own `TokenStorage` to persist tokens and
-    // retrieve them from storage.
+
     let auth = yup_oauth2::InstalledFlowAuthenticator::builder(
         secret,
         yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
@@ -96,51 +88,113 @@ async fn append_to_sheet(
         );
     let hub = Sheets::new(client, auth);
 
-    // Transform Toggl entries into Rows (Vector of Strings)
-    let mut values: Vec<Vec<serde_json::Value>> = Vec::new();
+    // 2. Read existing data
+    let range = "Sheet1!A:F";
+    let result = hub
+        .spreadsheets()
+        .values_get(spreadsheet_id, range)
+        .doit()
+        .await;
 
-    for entry in entries {
-        // Calculate duration in minutes (Toggl sends seconds)
+    let mut kept_rows: Vec<Vec<serde_json::Value>> = Vec::new();
+
+    if let Ok((_, value_range)) = result {
+        if let Some(rows) = value_range.values {
+            println!("Read {} existing rows from Sheet.", rows.len());
+            for row in rows {
+                // Try to parse the date from the first column (index 0)
+                let should_keep = if let Some(date_val) = row.get(0) {
+                    if let Some(date_str) = date_val.as_str() {
+                        // Try parsing with default to_string format first, then RFC3339
+                        // The previous code used entry.start.to_string() which is usually "%Y-%m-%d %H:%M:%S %Z"
+                        // But chrono's default Display might vary.
+                        // Let's try a few common formats.
+
+                        // Attempt 1: RFC3339 (standard)
+                        if let Ok(dt) = DateTime::parse_from_rfc3339(date_str) {
+                            dt.with_timezone(&Utc) < cutoff_date
+                        }
+                        // Attempt 2: "YYYY-MM-DD HH:MM:SS UTC" (common Display for Utc)
+                        else if let Ok(ndt) =
+                            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S UTC")
+                        {
+                            ndt.and_utc() < cutoff_date
+                        }
+                        // Attempt 3: Try without UTC suffix just in case
+                        else if let Ok(ndt) =
+                            NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S")
+                        {
+                            ndt.and_utc() < cutoff_date
+                        } else {
+                            // Could not parse date, keep the row (safe default, e.g. header)
+                            true
+                        }
+                    } else {
+                        true // Not a string, keep it
+                    }
+                } else {
+                    true // Empty row or no first col, keep it
+                };
+
+                if should_keep {
+                    kept_rows.push(row);
+                }
+            }
+        }
+    }
+
+    println!("Kept {} rows older than {}.", kept_rows.len(), cutoff_date);
+
+    // 3. Convert new Toggl entries to Rows
+    let mut new_rows: Vec<Vec<serde_json::Value>> = Vec::new();
+    for entry in new_entries {
         let duration_mins = entry.duration as f64 / 60.0;
-
-        // Handle Optional Stop time
         let stop_time = match entry.stop {
             Some(t) => t.to_rfc3339(),
             None => "Running".to_string(),
         };
-
-        // Flatten tags
         let tags_str = entry.tags.unwrap_or_default().join(", ");
 
+        // Use RFC3339 for new entries for better machine readability
         let row = vec![
-            serde_json::json!(entry.start.to_string()), // Column A: Date/Time
-            serde_json::json!(entry.description.unwrap_or_default()), // Column B: Description
-            serde_json::json!(duration_mins),           // Column C: Duration (mins)
-            serde_json::json!(entry.project_id.unwrap_or_default().to_string()), // Column D: Project ID
-            serde_json::json!(tags_str),                                         // Column E: Tags
-            serde_json::json!(stop_time), // Column F: Stop Time
+            serde_json::json!(entry.start.to_rfc3339()),
+            serde_json::json!(entry.description.unwrap_or_default()),
+            serde_json::json!(duration_mins),
+            serde_json::json!(entry.project_id.unwrap_or_default().to_string()),
+            serde_json::json!(tags_str),
+            serde_json::json!(stop_time),
         ];
-        values.push(row);
+        new_rows.push(row);
     }
 
-    let req = ValueRange {
-        values: Some(values),
-        ..Default::default()
-    };
+    println!("Adding {} new entries.", new_rows.len());
 
-    // "Sheet1!A1" tells Google to look at Sheet1 and append after the last data found
-    let range = "Sheet1!A1";
+    // 4. Combine Rows
+    kept_rows.append(&mut new_rows);
 
-    let result = hub
-        .spreadsheets()
-        .values_append(req, spreadsheet_id, range)
-        .value_input_option("USER_ENTERED") // Parses numbers and dates automatically
+    // 5. Clear Sheet
+    // We clear everything to ensure no stale data remains if the total row count decreases
+    let clear_req = google_sheets4::api::ClearValuesRequest::default();
+    hub.spreadsheets()
+        .values_clear(clear_req, spreadsheet_id, "Sheet1!A:F")
         .doit()
-        .await;
+        .await?;
 
-    match result {
-        Ok(_) => println!("Successfully appended data to Google Sheet."),
-        Err(e) => eprintln!("Error writing to Google Sheets: {}", e),
+    // 6. Write All Data
+    if !kept_rows.is_empty() {
+        let req = ValueRange {
+            values: Some(kept_rows),
+            ..Default::default()
+        };
+
+        hub.spreadsheets()
+            .values_update(req, spreadsheet_id, "Sheet1!A1")
+            .value_input_option("USER_ENTERED")
+            .doit()
+            .await?;
+        println!("Successfully synced data to Google Sheet.");
+    } else {
+        println!("No data to write.");
     }
 
     Ok(())
@@ -157,18 +211,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let spreadsheet_id =
         env::var("GOOGLE_SHEETS_SPREADSHEET_ID").expect("GOOGLE_SHEETS_SPREADSHEET_ID must be set");
 
-    // 2. Define Time Range (e.g., Last 24 hours)
-    // You can adjust this logic to fetch "Yesterday", "Last Week", etc.
+    // 2. Define Time Range (Last 7 days)
     let end_date = Utc::now();
-    let start_date = end_date - chrono::Duration::hours(24);
+    let start_date = end_date - Duration::weeks(1);
 
     println!("Time Range: {} to {}", start_date, end_date);
 
     // 3. Fetch from Toggl
     let entries = fetch_toggl_entries(&toggl_token, start_date, end_date).await?;
 
-    // 4. Push to Google Sheets
-    append_to_sheet(&spreadsheet_id, entries).await?;
+    // 4. Sync to Google Sheets
+    // We use start_date as the cutoff: anything in the sheet >= start_date is replaced.
+    sync_sheet(&spreadsheet_id, entries, start_date).await?;
 
     Ok(())
 }
