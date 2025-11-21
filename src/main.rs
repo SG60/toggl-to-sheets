@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::env;
 use std::time::Duration as StdDuration;
 use tokio_cron_scheduler::{Job, JobScheduler};
+use tracing::{error, info, instrument};
 
 // --- Data Structures ---
 
@@ -25,7 +26,7 @@ struct TogglTimeEntry {
 }
 
 // --- Toggl Logic ---
-
+#[instrument]
 async fn fetch_toggl_entries(
     api_token: &str,
     start_date: DateTime<Utc>,
@@ -36,7 +37,7 @@ async fn fetch_toggl_entries(
     // Toggl v9 API Endpoint for "me/time_entries"
     let url = "https://api.track.toggl.com/api/v9/me/time_entries";
 
-    println!("Fetching Toggl entries...");
+    info!("Fetching Toggl entries...");
 
     let response = client
         .get(url)
@@ -56,7 +57,7 @@ async fn fetch_toggl_entries(
     }
 
     let entries: Vec<TogglTimeEntry> = response.json().await?;
-    println!("Found {} entries.", entries.len());
+    info!("Found {} entries.", entries.len());
 
     Ok(entries)
 }
@@ -95,6 +96,7 @@ fn extract_time_from_row(row: &[serde_json::Value]) -> f64 {
 
 const GOOGLE_SHEET_NAME: &str = "toggl_entries";
 
+#[instrument]
 async fn sync_sheet(
     spreadsheet_id: &str,
     new_entries: Vec<TogglTimeEntry>,
@@ -141,7 +143,7 @@ async fn sync_sheet(
         .unwrap_or(false);
 
     if !sheet_exists {
-        println!("Sheet '{}' not found. Creating it...", GOOGLE_SHEET_NAME);
+        info!("Sheet '{}' not found. Creating it...", GOOGLE_SHEET_NAME);
         let req = google_sheets4::api::BatchUpdateSpreadsheetRequest {
             requests: Some(vec![google_sheets4::api::Request {
                 add_sheet: Some(google_sheets4::api::AddSheetRequest {
@@ -161,7 +163,7 @@ async fn sync_sheet(
             .batch_update(req, spreadsheet_id)
             .doit()
             .await?;
-        println!("Sheet '{}' created.", GOOGLE_SHEET_NAME);
+        info!("Sheet '{}' created.", GOOGLE_SHEET_NAME);
     }
 
     // 2. Read existing data
@@ -187,7 +189,7 @@ async fn sync_sheet(
 
     if let Ok((_, value_range)) = result {
         if let Some(rows) = value_range.values {
-            println!("Read {} existing rows from Sheet.", rows.len());
+            info!("Read {} existing rows from Sheet.", rows.len());
             for row in rows {
                 // Check if it's a header row
                 if let Some(first_col) = row.first() {
@@ -248,7 +250,7 @@ async fn sync_sheet(
         }
     }
 
-    println!("Kept {} rows older than {}.", kept_rows.len(), cutoff_date);
+    info!("Kept {} rows older than {}.", kept_rows.len(), cutoff_date);
 
     // 3. Convert new Toggl entries to Rows
     let mut new_rows: Vec<Vec<serde_json::Value>> = Vec::new();
@@ -275,7 +277,7 @@ async fn sync_sheet(
         new_rows.push(row);
     }
 
-    println!("Adding {} new entries.", new_rows.len());
+    info!("Adding {} new entries.", new_rows.len());
 
     // 4. Combine and Sort Rows
     let mut data_rows = kept_rows;
@@ -316,16 +318,16 @@ async fn sync_sheet(
             .value_input_option("USER_ENTERED") // Important for Sheets to recognize numbers as potential dates
             .doit()
             .await?;
-        println!("Successfully synced data to Google Sheet.");
+        info!("Successfully synced data to Google Sheet.");
     } else {
-        println!("No data to write.");
+        info!("No data to write.");
     }
 
     Ok(())
 }
 
 // --- Main Execution ---
-
+#[instrument]
 async fn run_sync_task() -> anyhow::Result<()> {
     // 1. Load Config
     let toggl_token = env::var("TOGGL_API_TOKEN").expect("TOGGL_API_TOKEN must be set");
@@ -336,7 +338,7 @@ async fn run_sync_task() -> anyhow::Result<()> {
     let end_date = Utc::now();
     let start_date = end_date - Duration::weeks(1);
 
-    println!("Time Range: {} to {}", start_date, end_date);
+    info!("Time Range: {} to {}", start_date, end_date);
 
     // 3. Fetch from Toggl
     let entries = fetch_toggl_entries(&toggl_token, start_date, end_date).await?;
@@ -352,9 +354,12 @@ async fn run_sync_task() -> anyhow::Result<()> {
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
 
+    // initialise tracing
+    opentelemetry_tracing_utils::set_up_logging().expect("Tracing setup should work");
+
     // Run immediately on startup
     if let Err(e) = run_sync_task().await {
-        eprintln!("Error during initial sync: {}", e);
+        error!("Error during initial sync: {}", e);
     }
 
     let sched = JobScheduler::new().await?;
@@ -363,20 +368,27 @@ async fn main() -> anyhow::Result<()> {
     // Cron format: sec min hour day_of_month month day_of_week year
     // "0 */30 * * * *" means every 30th minute (0, 30)
     sched
-        .add(Job::new_async("0 */30 * * * *", |_uuid, _l| {
+        .add(Job::new_async("0 */30 * * * *", |uuid, mut l| {
             Box::pin(async move {
-                println!("Starting scheduled sync...");
+                info!("Starting scheduled sync...");
                 if let Err(e) = run_sync_task().await {
-                    eprintln!("Error during scheduled sync: {}", e);
+                    error!("Error during scheduled sync: {}", e);
                 }
-                println!("Scheduled sync finished.");
+                info!("Scheduled sync finished.");
+
+                // Query the next execution time for this job
+                let next_tick = l.next_tick_for_job(uuid).await;
+                match next_tick {
+                    Ok(Some(ts)) => info!("Next time for 7s job is {:?}", ts),
+                    _ => info!("Could not get next tick for 7s job"),
+                }
             })
         })?)
         .await?;
 
     sched.start().await?;
 
-    println!("Scheduler started. Running sync every 30 minutes.");
+    info!("Scheduler started. Running sync every 30 minutes.");
 
     // Keep the main thread alive
     loop {

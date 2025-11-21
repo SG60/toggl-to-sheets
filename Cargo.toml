@@ -28,3 +28,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Nice error handling
 anyhow = "1.0.100"
+
+# Telemetry
+opentelemetry-tracing-utils = "0.7.0"
+tracing = "0.1.41"
