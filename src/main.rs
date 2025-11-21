@@ -135,7 +135,7 @@ async fn sync_sheet(
             sheets.iter().any(|s| {
                 s.properties
                     .as_ref()
-                    .map_or(false, |p| p.title.as_deref() == Some(GOOGLE_SHEET_NAME))
+                    .is_some_and(|p| p.title.as_deref() == Some(GOOGLE_SHEET_NAME))
             })
         })
         .unwrap_or(false);
