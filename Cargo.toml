@@ -30,5 +30,5 @@ chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0.100"
 
 # Telemetry
-opentelemetry-tracing-utils = "0.7.0"
+opentelemetry-tracing-utils = "0.7.1"
 tracing = "0.1.41"
