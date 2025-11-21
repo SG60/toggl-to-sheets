@@ -25,3 +25,6 @@ dotenv = "0.15"
 
 # For Date and Time handling
 chrono = { version = "0.4", features = ["serde"] }
+
+# Nice error handling
+anyhow = "1.0.100"

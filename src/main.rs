@@ -1,9 +1,9 @@
+use anyhow::anyhow;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use dotenv::dotenv;
 use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Sheets};
 use serde::Deserialize;
 use std::env;
-use std::error::Error;
 use std::time::Duration as StdDuration;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
@@ -30,7 +30,7 @@ async fn fetch_toggl_entries(
     api_token: &str,
     start_date: DateTime<Utc>,
     end_date: DateTime<Utc>,
-) -> Result<Vec<TogglTimeEntry>, Box<dyn Error>> {
+) -> anyhow::Result<Vec<TogglTimeEntry>> {
     let client = reqwest::Client::new();
 
     // Toggl v9 API Endpoint for "me/time_entries"
@@ -52,7 +52,7 @@ async fn fetch_toggl_entries(
 
     if !response.status().is_success() {
         let error_text = response.text().await?;
-        return Err(format!("Toggl API Error: {}", error_text).into());
+        return Err(anyhow!("Toggl API Error: {}", error_text));
     }
 
     let entries: Vec<TogglTimeEntry> = response.json().await?;
@@ -99,7 +99,7 @@ async fn sync_sheet(
     spreadsheet_id: &str,
     new_entries: Vec<TogglTimeEntry>,
     cutoff_date: DateTime<Utc>,
-) -> Result<(), Box<dyn Error>> {
+) -> anyhow::Result<()> {
     // 1. Authenticate
     let secret: yup_oauth2::ApplicationSecret =
         yup_oauth2::read_application_secret("google_clientsecret.json")
@@ -326,7 +326,7 @@ async fn sync_sheet(
 
 // --- Main Execution ---
 
-async fn run_sync_task() -> Result<(), Box<dyn Error>> {
+async fn run_sync_task() -> anyhow::Result<()> {
     // 1. Load Config
     let toggl_token = env::var("TOGGL_API_TOKEN").expect("TOGGL_API_TOKEN must be set");
     let spreadsheet_id =
@@ -349,7 +349,7 @@ async fn run_sync_task() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> anyhow::Result<()> {
     dotenv().ok();
 
     // Run immediately on startup

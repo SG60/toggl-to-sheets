@@ -1731,6 +1731,7 @@ dependencies = [
 name = "toggl-to-sheets"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "dotenv",
  "google-sheets4",
