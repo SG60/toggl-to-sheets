@@ -4,6 +4,8 @@ use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Shee
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
+use std::time::Duration as StdDuration;
+use tokio_cron_scheduler::{Job, JobScheduler};
 
 // --- Data Structures ---
 
@@ -324,10 +326,7 @@ async fn sync_sheet(
 
 // --- Main Execution ---
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    dotenv().ok();
-
+async fn run_sync_task() -> Result<(), Box<dyn Error>> {
     // 1. Load Config
     let toggl_token = env::var("TOGGL_API_TOKEN").expect("TOGGL_API_TOKEN must be set");
     let spreadsheet_id =
@@ -347,6 +346,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
     sync_sheet(&spreadsheet_id, entries, start_date).await?;
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    dotenv().ok();
+
+    // Run immediately on startup
+    if let Err(e) = run_sync_task().await {
+        eprintln!("Error during initial sync: {}", e);
+    }
+
+    let sched = JobScheduler::new().await?;
+
+    // Run every 30 minutes
+    // Cron format: sec min hour day_of_month month day_of_week year
+    // "0 */30 * * * *" means every 30th minute (0, 30)
+    sched
+        .add(Job::new_async("0 */30 * * * *", |_uuid, _l| {
+            Box::pin(async move {
+                println!("Starting scheduled sync...");
+                if let Err(e) = run_sync_task().await {
+                    eprintln!("Error during scheduled sync: {}", e);
+                }
+                println!("Scheduled sync finished.");
+            })
+        })?)
+        .await?;
+
+    sched.start().await?;
+
+    println!("Scheduler started. Running sync every 30 minutes.");
+
+    // Keep the main thread alive
+    loop {
+        tokio::time::sleep(StdDuration::from_secs(100)).await;
+    }
 }
 
 #[cfg(test)]
