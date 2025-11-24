@@ -53,7 +53,7 @@ async fn fetch_toggl_entries(
 
     if !response.status().is_success() {
         let error_text = response.text().await?;
-        return Err(anyhow!("Toggl API Error: {}", error_text));
+        return Err(anyhow!("Toggl API Error: {error_text}"));
     }
 
     let entries: Vec<TogglTimeEntry> = response.json().await?;
@@ -71,7 +71,9 @@ fn to_serial_number(t: DateTime<Utc>) -> f64 {
         .and_utc();
     let duration = t.signed_duration_since(epoch);
     // Days + fraction of day
-    duration.num_milliseconds() as f64 / 86_400_000.0
+    #[allow(clippy::cast_precision_loss)]
+    let serial_number = duration.num_milliseconds() as f64 / 86_400_000.0;
+    serial_number
 }
 
 fn extract_time_from_row(row: &[serde_json::Value]) -> f64 {
@@ -96,6 +98,7 @@ fn extract_time_from_row(row: &[serde_json::Value]) -> f64 {
 
 const GOOGLE_SHEET_NAME: &str = "toggl_entries";
 
+#[allow(clippy::too_many_lines)]
 #[instrument]
 async fn sync_sheet(
     spreadsheet_id: &str,
@@ -130,17 +133,13 @@ async fn sync_sheet(
 
     // Check if the sheet exists
     let spreadsheet = hub.spreadsheets().get(spreadsheet_id).doit().await?.1;
-    let sheet_exists = spreadsheet
-        .sheets
-        .as_ref()
-        .map(|sheets| {
-            sheets.iter().any(|s| {
-                s.properties
-                    .as_ref()
-                    .is_some_and(|p| p.title.as_deref() == Some(GOOGLE_SHEET_NAME))
-            })
+    let sheet_exists = spreadsheet.sheets.as_ref().is_some_and(|sheets| {
+        sheets.iter().any(|s| {
+            s.properties
+                .as_ref()
+                .is_some_and(|p| p.title.as_deref() == Some(GOOGLE_SHEET_NAME))
         })
-        .unwrap_or(false);
+    });
 
     if !sheet_exists {
         info!("Sheet '{}' not found. Creating it...", GOOGLE_SHEET_NAME);
@@ -168,7 +167,7 @@ async fn sync_sheet(
 
     // 2. Read existing data
     // We use UNFORMATTED_VALUE to get numbers for dates if they are already in serial format
-    let range = format!("'{}'!A:F", GOOGLE_SHEET_NAME);
+    let range = format!("'{GOOGLE_SHEET_NAME}'!A:F");
     let result = hub
         .spreadsheets()
         .values_get(spreadsheet_id, &range)
@@ -211,6 +210,7 @@ async fn sync_sheet(
                         .unwrap()
                         .and_utc();
                         // Convert serial back to duration
+                        #[allow(clippy::cast_possible_truncation)]
                         let millis = (serial * 86_400_000.0) as i64;
                         let dt = epoch + Duration::milliseconds(millis);
                         dt < cutoff_date
@@ -255,6 +255,7 @@ async fn sync_sheet(
     // 3. Convert new Toggl entries to Rows
     let mut new_rows: Vec<Vec<serde_json::Value>> = Vec::new();
     for entry in new_entries {
+        #[allow(clippy::cast_precision_loss)]
         let duration_mins = entry.duration as f64 / 60.0;
 
         let stop_val = match entry.stop {
@@ -267,10 +268,12 @@ async fn sync_sheet(
         // Use Serial Number for start time
         let row = vec![
             serde_json::json!(to_serial_number(entry.start)),
-            serde_json::json!(entry.description.unwrap_or("".into())),
+            serde_json::json!(entry.description.unwrap_or_default()),
             serde_json::json!(duration_mins),
-            serde_json::json!(entry.project_id.map_or("".into(), |id| id.to_string())),
-            serde_json::json!(entry.project_name.unwrap_or("".into())),
+            serde_json::json!(entry
+                .project_id
+                .map_or_else(String::new, |id| id.to_string())),
+            serde_json::json!(entry.project_name.unwrap_or_default()),
             serde_json::json!(tags_str),
             stop_val,
         ];
@@ -301,26 +304,26 @@ async fn sync_sheet(
         .values_clear(
             clear_req,
             spreadsheet_id,
-            &format!("'{}'!A:F", GOOGLE_SHEET_NAME),
+            &format!("'{GOOGLE_SHEET_NAME}'!A:F"),
         )
         .doit()
         .await?;
 
     // 6. Write All Data
-    if !all_rows.is_empty() {
+    if all_rows.is_empty() {
+        info!("No data to write.");
+    } else {
         let req = ValueRange {
             values: Some(all_rows),
             ..Default::default()
         };
 
         hub.spreadsheets()
-            .values_update(req, spreadsheet_id, &format!("'{}'!A1", GOOGLE_SHEET_NAME))
+            .values_update(req, spreadsheet_id, &format!("'{GOOGLE_SHEET_NAME}'!A1"))
             .value_input_option("USER_ENTERED") // Important for Sheets to recognize numbers as potential dates
             .doit()
             .await?;
         info!("Successfully synced data to Google Sheet.");
-    } else {
-        info!("No data to write.");
     }
 
     Ok(())
@@ -378,9 +381,10 @@ async fn main() -> anyhow::Result<()> {
 
                 // Query the next execution time for this job
                 let next_tick = l.next_tick_for_job(uuid).await;
-                match next_tick {
-                    Ok(Some(ts)) => info!("Next time for 7s job is {:?}", ts),
-                    _ => info!("Could not get next tick for 7s job"),
+                if let Ok(Some(ts)) = next_tick {
+                    info!("Next time for 7s job is {:?}", ts);
+                } else {
+                    info!("Could not get next tick for 7s job");
                 }
             })
         })?)
