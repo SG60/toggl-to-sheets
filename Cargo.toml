@@ -3,6 +3,9 @@ name = "toggl-to-sheets"
 version = "0.1.0"
 edition = "2021"
 
+[lints.clippy]
+pedantic = "warn"
+
 [dependencies]
 # For Async Runtime
 tokio = { version = "1.0", features = ["full"] }
