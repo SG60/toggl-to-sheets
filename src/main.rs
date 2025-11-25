@@ -1,9 +1,9 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use config::ConfigError;
 use dotenv::dotenv;
 use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Sheets};
 use serde::Deserialize;
-use std::env;
 use std::time::Duration as StdDuration;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info, instrument};
@@ -330,27 +330,43 @@ async fn sync_sheet(
 }
 
 // --- Main Execution ---
-#[instrument]
-async fn run_sync_task() -> anyhow::Result<()> {
-    // 1. Load Config
-    let toggl_token = env::var("TOGGL_API_TOKEN").expect("TOGGL_API_TOKEN must be set");
-    let spreadsheet_id =
-        env::var("GOOGLE_SHEETS_SPREADSHEET_ID").expect("GOOGLE_SHEETS_SPREADSHEET_ID must be set");
-
-    // 2. Define Time Range (Last 7 days)
+#[instrument(skip(toggl_token, spreadsheet_id))]
+async fn run_sync_task(toggl_token: &str, spreadsheet_id: &str) -> anyhow::Result<()> {
+    // Define Time Range (Last 7 days)
     let end_date = Utc::now();
     let start_date = end_date - Duration::weeks(1);
 
     info!("Time Range: {} to {}", start_date, end_date);
 
-    // 3. Fetch from Toggl
-    let entries = fetch_toggl_entries(&toggl_token, start_date, end_date).await?;
+    // Fetch from Toggl
+    let entries = fetch_toggl_entries(toggl_token, start_date, end_date).await?;
 
-    // 4. Sync to Google Sheets
+    // Sync to Google Sheets
     // We use start_date as the cutoff: anything in the sheet >= start_date is replaced.
-    sync_sheet(&spreadsheet_id, entries, start_date).await?;
+    sync_sheet(spreadsheet_id, entries, start_date).await?;
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct Settings {
+    toggl_api_token: String,
+    google_sheets_spreadsheet_id: String,
+}
+impl Settings {
+    /// Get a new instance of Settings from the environment or config file.
+    fn new() -> Result<Self, ConfigError> {
+        let settings = config::Config::builder()
+            // Add in `./settings.toml` (other extensions allowed as well)
+            .add_source(config::File::with_name("settings").required(false))
+            // Add in settings from the environment (with a prefix of TOGGL2SHEETS)
+            // Eg.. `TOGGL2SHEETS_DEBUG=1 ./target/app` would set the `debug` key
+            .add_source(config::Environment::with_prefix("TOGGL2SHEETS"))
+            .build()
+            .unwrap();
+
+        settings.try_deserialize()
+    }
 }
 
 #[tokio::main]
@@ -360,8 +376,19 @@ async fn main() -> anyhow::Result<()> {
     // initialise tracing
     opentelemetry_tracing_utils::set_up_logging().expect("Tracing setup should work");
 
+    // Get configuration settings
+    let settings = Settings::new().expect("settings should exist");
+
+    // Print out our settings
+    debug!("{settings:?}");
+
     // Run immediately on startup
-    if let Err(e) = run_sync_task().await {
+    if let Err(e) = run_sync_task(
+        &settings.toggl_api_token,
+        &settings.google_sheets_spreadsheet_id,
+    )
+    .await
+    {
         error!("Error during initial sync: {}", e);
     }
 
@@ -371,20 +398,24 @@ async fn main() -> anyhow::Result<()> {
     // Cron format: sec min hour day_of_month month day_of_week year
     // "0 */30 * * * *" means every 30th minute (0, 30)
     sched
-        .add(Job::new_async("0 */30 * * * *", |uuid, mut l| {
-            Box::pin(async move {
-                info!("Starting scheduled sync...");
-                if let Err(e) = run_sync_task().await {
-                    error!("Error during scheduled sync: {}", e);
-                }
-                info!("Scheduled sync finished.");
+        .add(Job::new_async("0 */30 * * * *", move |uuid, mut l| {
+            Box::pin({
+                let toggl_api_token = settings.toggl_api_token.clone();
+                let spreadsheet_id = settings.google_sheets_spreadsheet_id.clone();
+                async move {
+                    info!("Starting scheduled sync...");
+                    if let Err(e) = run_sync_task(&toggl_api_token, &spreadsheet_id).await {
+                        error!("Error during scheduled sync: {}", e);
+                    }
+                    info!("Scheduled sync finished.");
 
-                // Query the next execution time for this job
-                let next_tick = l.next_tick_for_job(uuid).await;
-                if let Ok(Some(ts)) = next_tick {
-                    info!("Next time for 7s job is {:?}", ts);
-                } else {
-                    info!("Could not get next tick for 7s job");
+                    // Query the next execution time for this job
+                    let next_tick = l.next_tick_for_job(uuid).await;
+                    if let Ok(Some(ts)) = next_tick {
+                        info!("Next time for 7s job is {:?}", ts);
+                    } else {
+                        info!("Could not get next tick for 7s job");
+                    }
                 }
             })
         })?)

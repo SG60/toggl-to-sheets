@@ -26,6 +26,9 @@ google-sheets4 = "6.0"
 # For Environment Variables
 dotenv = "0.15"
 
+# Handle application configuration from multiple sources
+config = "0.15.19"
+
 # For Date and Time handling
 chrono = { version = "0.4", features = ["serde"] }
 
