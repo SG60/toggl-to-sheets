@@ -99,7 +99,7 @@ fn extract_time_from_row(row: &[serde_json::Value]) -> f64 {
 const GOOGLE_SHEET_NAME: &str = "toggl_entries";
 
 #[allow(clippy::too_many_lines)]
-#[instrument]
+#[instrument(skip(new_entries))]
 async fn sync_sheet(
     spreadsheet_id: &str,
     new_entries: Vec<TogglTimeEntry>,
