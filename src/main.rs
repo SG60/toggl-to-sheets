@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use config::ConfigError;
 use dotenv::dotenv;
@@ -6,7 +6,7 @@ use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Shee
 use serde::Deserialize;
 use std::time::Duration as StdDuration;
 use tokio_cron_scheduler::{Job, JobScheduler};
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 // --- Data Structures ---
 
@@ -352,6 +352,14 @@ async fn run_sync_task(toggl_token: &str, spreadsheet_id: &str) -> anyhow::Resul
 struct Settings {
     toggl_api_token: String,
     google_sheets_spreadsheet_id: String,
+    #[serde(default = "default_schedule_string")]
+    sync_schedule: String,
+}
+fn default_schedule_string() -> String {
+    // Run every 30 minutes
+    // Cron format: sec min hour day_of_month month day_of_week year
+    // "0 */30 * * * *" means every 30th minute (0, 30)
+    "0 */30 * * * *".to_string()
 }
 impl Settings {
     /// Get a new instance of Settings from the environment or config file.
@@ -377,7 +385,7 @@ async fn main() -> anyhow::Result<()> {
     opentelemetry_tracing_utils::set_up_logging().expect("Tracing setup should work");
 
     // Get configuration settings
-    let settings = Settings::new().expect("settings should exist");
+    let settings = Settings::new().context("settings should exist")?;
 
     // Print out our settings
     debug!("{settings:?}");
@@ -394,36 +402,41 @@ async fn main() -> anyhow::Result<()> {
 
     let sched = JobScheduler::new().await?;
 
-    // Run every 30 minutes
-    // Cron format: sec min hour day_of_month month day_of_week year
-    // "0 */30 * * * *" means every 30th minute (0, 30)
-    sched
-        .add(Job::new_async("0 */30 * * * *", move |uuid, mut l| {
-            Box::pin({
-                let toggl_api_token = settings.toggl_api_token.clone();
-                let spreadsheet_id = settings.google_sheets_spreadsheet_id.clone();
-                async move {
-                    info!("Starting scheduled sync...");
-                    if let Err(e) = run_sync_task(&toggl_api_token, &spreadsheet_id).await {
-                        error!("Error during scheduled sync: {}", e);
-                    }
-                    info!("Scheduled sync finished.");
+    info!(
+        sync_schedule = settings.sync_schedule,
+        "Setting up sync schedule"
+    );
 
-                    // Query the next execution time for this job
-                    let next_tick = l.next_tick_for_job(uuid).await;
-                    if let Ok(Some(ts)) = next_tick {
-                        info!("Next time for 7s job is {:?}", ts);
-                    } else {
-                        info!("Could not get next tick for 7s job");
+    sched
+        .add(Job::new_async(
+            settings.sync_schedule,
+            move |uuid, mut l| {
+                Box::pin({
+                    let toggl_api_token = settings.toggl_api_token.clone();
+                    let spreadsheet_id = settings.google_sheets_spreadsheet_id.clone();
+                    async move {
+                        info!("Starting scheduled sync...");
+                        if let Err(e) = run_sync_task(&toggl_api_token, &spreadsheet_id).await {
+                            error!("Error during scheduled sync: {}", e);
+                        }
+                        info!("Scheduled sync finished.");
+
+                        // Query the next execution time for this job
+                        let next_tick = l.next_tick_for_job(uuid).await;
+                        if let Ok(Some(ts)) = next_tick {
+                            info!("Next time for job is {:?}", ts);
+                        } else {
+                            info!("Could not get next tick for job");
+                        }
                     }
-                }
-            })
-        })?)
+                })
+            },
+        )?)
         .await?;
 
     sched.start().await?;
 
-    info!("Scheduler started. Running sync every 30 minutes.");
+    info!("Scheduler started.");
 
     // Keep the main thread alive
     loop {
