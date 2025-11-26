@@ -46,8 +46,8 @@ jobs:
         # run: nix develop -c cargo test
         run: cargo test
       - name: clippy
-        # run: nix develop -c cargo test
-        run: cargo clippy
+        # Running clippy with -Dwarnings to get warnings as errors in CI
+        run: cargo clippy -- -Dwarnings
 
   build:
     runs-on: ubuntu-latest
