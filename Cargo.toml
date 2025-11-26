@@ -14,7 +14,10 @@ tokio = { version = "1.0", features = ["full"] }
 tokio-cron-scheduler = { version = "0.15.1", features = ["english"] }
 
 # For HTTP Requests
-reqwest = { version = "0.11", features = ["json", "blocking"] }
+reqwest = { version = "0.11", features = [
+	"json",
+	"rustls-tls",
+], default-features = false }
 
 # For JSON Serialization/Deserialization
 serde = { version = "1.0", features = ["derive"] }
