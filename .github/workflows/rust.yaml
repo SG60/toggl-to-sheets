@@ -73,6 +73,7 @@ jobs:
         with:
           cache-all-crates: "true"
           # cache-on-failure: "true"
+          shared-key: "build-${{ matrix.target.rust }}"
 
       - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
 
