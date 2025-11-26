@@ -1,0 +1,27 @@
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toggl-to-sheets
+spec:
+  template:
+    metadata:
+      annotations:
+        instrumentation.opentelemetry.io/inject-sdk: "telemetry/default-instrumentation"
+    spec:
+      containers:
+        - name: toggl-to-sheets
+          image: ghcr.io/SG60/toggl-to-sheets
+          env:
+            - name: RUST_LOG
+              value: info,opentelemetry_tracing_utils,toggl_to_sheets=debug
+          envFrom:
+          resources:
+            requests:
+              cpu: 5m
+              memory: 1Mi
+            limits:
+              cpu: 100m
+              memory: 100Mi
+---
+

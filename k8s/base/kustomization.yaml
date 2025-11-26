@@ -1,0 +1,9 @@
+resources:
+  - app.yaml
+
+commonLabels:
+  app.kubernetes.io/name: toggl-to-sheets
+
+labels:
+  - pairs:
+      app.kubernetes.io/version: sha-CURRENT-VERSION

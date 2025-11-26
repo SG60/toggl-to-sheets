@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Include these labels in the pod template, but don't include them in selectors,
+# as they are supposed to be immutable!
+labels:
+  - includeTemplates: true
+    pairs:
+      app.kubernetes.io/version: 27852c85f96988ce9d2fd7199fbece1b52ee4e6c
+commonLabels:
+  app.kubernetes.io/instance: toggl-to-sheets
+  app.kubernetes.io/name: toggl-to-sheets
+resources:
+  - ../../base
+namespace: toggl-to-sheets
+images:
+  - digest: sha256:78aad9027be801cfe8bbcbe87d56f4e37984d4bb05e1c74306eb33adda59c177
+    name: ghcr.io/SG60/toggl-to-sheets
+    newName: ghcr.io/SG60/toggl-to-sheets:sha-27852c85f96988ce9d2fd7199fbece1b52ee4e6c
