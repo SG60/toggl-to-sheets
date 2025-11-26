@@ -1,0 +1,10 @@
+[target.aarch64-unknown-linux-musl]
+# Use mold as the linker for linux aarch64 targets. Quicker!
+linker = "clang"
+# runner = "my-emulator"
+rustflags = [
+	"-C",
+	"link-arg=-fuse-ld=mold",
+	"-C",
+	"link-arg=--target=aarch64-unknown-linux-musl",
+]
