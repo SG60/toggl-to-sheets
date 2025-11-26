@@ -16,7 +16,7 @@ env:
   # get correct commit sha for pull requests as well
   COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   REGISTRY: ghcr.io
-  DOCKER_IMAGE_FULL_NAME: ghcr.io/SG60/toggl-to-sheets
+  DOCKER_IMAGE_FULL_NAME: ghcr.io/sg60/toggl-to-sheets
 
 jobs:
   check:
