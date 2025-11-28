@@ -19,7 +19,7 @@ namespace: toggl-to-sheets
 
 images:
   - name: ghcr.io/SG60/toggl-to-sheets
-    newTag: sha-1e9df7fed9ce178779d8cb238d743640a8b3a5a6
+    newTag: sha-6671635dfe52ae1528d2465da7093dac63e7cd4a
 
 # Use replacements to copy the newTag to the label
 replacements:
