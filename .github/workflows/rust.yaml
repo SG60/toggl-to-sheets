@@ -220,20 +220,20 @@ jobs:
         env:
           KUSTOMIZE_COMMAND: ${{ steps.kustomize-installation.outputs.KUSTOMIZE_COMMAND }}
         run: |
-          cd k8s/overlays/prod
+          cd k8s/base
           # update image digest
           $KUSTOMIZE_COMMAND edit set image \
             ${DOCKER_IMAGE_FULL_NAME}=${DOCKER_IMAGE_FULL_NAME}:sha-${COMMIT_SHA}@${{ needs.build.outputs.pushed-image-digest }}
       - name: Update version label
         uses: mikefarah/yq@9adde1ac14bb283b8955d2b0d567bcaf3c69e639 # v4.42.1
         with:
-          cmd: yq -i '.labels[].pairs."app.kubernetes.io/version" = strenv(COMMIT_SHA)' k8s/overlays/prod/kustomization.yaml
+          cmd: yq -i '.labels[].pairs."app.kubernetes.io/version" = strenv(COMMIT_SHA)' k8s/base/kustomization.yaml
 
       - name: Commit to git
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git add k8s/overlays/prod
+          git add k8s/base
           git commit -m "update: image to version $COMMIT_SHA
 
           [no ci]"
