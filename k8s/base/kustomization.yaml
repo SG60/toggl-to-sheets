@@ -13,11 +13,10 @@ commonLabels:
 labels:
   - includeTemplates: true
     pairs:
-      app.kubernetes.io/version: 27852c85f96988ce9d2fd7199fbece1b52ee4e6c
+      app.kubernetes.io/version: 1e9df7fed9ce178779d8cb238d743640a8b3a5a6
 
 namespace: toggl-to-sheets
 
 images:
-  - digest: sha256:78aad9027be801cfe8bbcbe87d56f4e37984d4bb05e1c74306eb33adda59c177
-    name: ghcr.io/SG60/toggl-to-sheets
-    newName: ghcr.io/SG60/toggl-to-sheets:sha-27852c85f96988ce9d2fd7199fbece1b52ee4e6c
+  - name: ghcr.io/SG60/toggl-to-sheets
+    newName: ghcr.io/SG60/toggl-to-sheets:sha-1e9df7fed9ce178779d8cb238d743640a8b3a5a6
