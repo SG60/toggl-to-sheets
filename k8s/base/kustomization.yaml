@@ -13,10 +13,26 @@ commonLabels:
 labels:
   - includeTemplates: true
     pairs:
-      app.kubernetes.io/version: 1e9df7fed9ce178779d8cb238d743640a8b3a5a6
+      app.kubernetes.io/version: PLACEHOLDER_VERSION
 
 namespace: toggl-to-sheets
 
 images:
   - name: ghcr.io/SG60/toggl-to-sheets
-    newName: ghcr.io/SG60/toggl-to-sheets:sha-1e9df7fed9ce178779d8cb238d743640a8b3a5a6
+    newTag: sha-1e9df7fed9ce178779d8cb238d743640a8b3a5a6
+
+# Use replacements to copy the newTag to the label
+replacements:
+  - source: # The source of the version (the image tag)
+      kind: Deployment
+      fieldPath: spec.template.spec.containers.[name=toggl-to-sheets].image # The container image field
+      options:
+        delimiter: ":" # Specify the delimiter to split the image string
+        index: 1 # Select the second part (the tag/version)
+    targets: # The destination for the version (the label)
+      # Targets the special placeholder value used in the labels block
+      - select:
+          # Use the label you just applied to select ALL resources
+          labelSelector: app.kubernetes.io/version=PLACEHOLDER_VERSION
+        fieldPaths:
+          - metadata.labels.[app.kubernetes.io/version] # The label itself
