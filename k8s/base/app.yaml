@@ -11,7 +11,7 @@ spec:
     spec:
       containers:
         - name: toggl-to-sheets
-          image: ghcr.io/SG60/toggl-to-sheets # docker image version set by kustomization.yaml
+          image: ghcr.io/sg60/toggl-to-sheets # docker image version set by kustomization.yaml
           env:
             - name: RUST_LOG
               value: info,opentelemetry_tracing_utils,toggl_to_sheets=debug
