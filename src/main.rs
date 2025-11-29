@@ -348,11 +348,13 @@ async fn run_sync_task(
 #[derive(Debug, Deserialize)]
 struct Settings {
     toggl_api_token: String,
+    /// Used if the key is not passed as an env var.
     #[serde(default = "default_svc_key_file")]
     google_service_account_key_file: String,
     google_sheets_spreadsheet_id: String,
     #[serde(default = "default_schedule_string")]
     sync_schedule: String,
+    google_service_account_key: Option<String>,
 }
 fn default_svc_key_file() -> String {
     "google_private_key.json".to_string()
@@ -393,15 +395,21 @@ async fn main() -> anyhow::Result<()> {
     // Print out our settings. NOTE: Contains sensitive stuff.
     trace!("{settings:?}");
 
-    let google_authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(
-        yup_oauth2::read_service_account_key(settings.google_service_account_key_file)
+    let service_account_key = match settings.google_service_account_key {
+        Some(value) => yup_oauth2::parse_service_account_key(value)
+            .expect("should be a parseable service account key"),
+        // If no key is passed as an env var, read from the file system
+        None => yup_oauth2::read_service_account_key(settings.google_service_account_key_file)
             .await
             .expect("the google service account key file should exist"),
-    )
-    .persist_tokens_to_disk("google_tokencache.json")
-    .build()
-    .await
-    .expect("yup authenticator should succeed");
+    };
+
+    let google_authenticator =
+        yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key)
+            .persist_tokens_to_disk("google_tokencache.json")
+            .build()
+            .await
+            .expect("yup authenticator should succeed");
 
     // Run immediately on startup
     if let Err(e) = run_sync_task(
