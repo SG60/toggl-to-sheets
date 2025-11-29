@@ -19,7 +19,7 @@ namespace: toggl-to-sheets
 
 images:
   - name: ghcr.io/sg60/toggl-to-sheets
-    newTag: 0.2.0
+    newTag: 0.2.1
 
 # Use replacements to copy the newTag to the label
 replacements:
