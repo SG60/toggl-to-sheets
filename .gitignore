@@ -7,3 +7,4 @@
 # oauth2 secrets for google apis
 *clientsecret.json
 *tokencache.json
+*private_key.json
