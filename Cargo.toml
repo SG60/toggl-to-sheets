@@ -2,6 +2,9 @@
 name = "toggl-to-sheets"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/sg60/toggl-to-sheets"
+description = "A tool to export Toggl data to Google Sheets"
 
 [lints.clippy]
 pedantic = "warn"
