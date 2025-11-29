@@ -2,6 +2,8 @@
 **.env*
 !**.env.example
 
+.direnv
+
 # oauth2 secrets for google apis
 *clientsecret.json
 *tokencache.json
