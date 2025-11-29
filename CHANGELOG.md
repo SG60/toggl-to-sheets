@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+- Authenticates to the Google Sheets API using a Service Account rather than the OAuth Installed Application flow. This avoids requiring user interaction after the app has already been configured.
+
 ### Fixed
 - Bad types causing misaligned columns in Google Sheets sometimes.
 

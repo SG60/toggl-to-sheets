@@ -6,7 +6,7 @@ use google_sheets4::{api::ValueRange, hyper_rustls, hyper_util, yup_oauth2, Shee
 use serde::Deserialize;
 use std::time::Duration as StdDuration;
 use tokio_cron_scheduler::{Job, JobScheduler};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, trace};
 
 // --- Data Structures ---
 
@@ -98,28 +98,19 @@ fn extract_time_from_row(row: &[serde_json::Value]) -> f64 {
 
 const GOOGLE_SHEET_NAME: &str = "toggl_entries";
 
+type GoogleAuthenticator = yup_oauth2::authenticator::Authenticator<
+    hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+>;
+
 #[allow(clippy::too_many_lines)]
-#[instrument(skip(new_entries))]
+#[instrument(skip(new_entries, google_auth))]
 async fn sync_sheet(
     spreadsheet_id: &str,
     new_entries: Vec<TogglTimeEntry>,
     cutoff_date: DateTime<Utc>,
+    google_auth: GoogleAuthenticator,
 ) -> anyhow::Result<()> {
-    // 1. Authenticate
-    let secret: yup_oauth2::ApplicationSecret =
-        yup_oauth2::read_application_secret("google_clientsecret.json")
-            .await
-            .expect("google_clientsecret.json");
-
-    let auth = yup_oauth2::InstalledFlowAuthenticator::builder(
-        secret,
-        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
-    )
-    .persist_tokens_to_disk("google_tokencache.json")
-    .build()
-    .await
-    .unwrap();
-
+    debug!("building hyper client for google sheets requests");
     let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .build(
             hyper_rustls::HttpsConnectorBuilder::new()
@@ -129,7 +120,7 @@ async fn sync_sheet(
                 .enable_http1()
                 .build(),
         );
-    let hub = Sheets::new(client, auth);
+    let hub = Sheets::new(client, google_auth);
 
     // Check if the sheet exists
     let spreadsheet = hub.spreadsheets().get(spreadsheet_id).doit().await?.1;
@@ -332,8 +323,12 @@ async fn sync_sheet(
 }
 
 // --- Main Execution ---
-#[instrument(skip(toggl_token, spreadsheet_id))]
-async fn run_sync_task(toggl_token: &str, spreadsheet_id: &str) -> anyhow::Result<()> {
+#[instrument(skip(toggl_token, spreadsheet_id, google_auth))]
+async fn run_sync_task(
+    toggl_token: &str,
+    spreadsheet_id: &str,
+    google_auth: GoogleAuthenticator,
+) -> anyhow::Result<()> {
     // Define Time Range (Last 7 days)
     let end_date = Utc::now();
     let start_date = end_date - Duration::weeks(1);
@@ -345,7 +340,7 @@ async fn run_sync_task(toggl_token: &str, spreadsheet_id: &str) -> anyhow::Resul
 
     // Sync to Google Sheets
     // We use start_date as the cutoff: anything in the sheet >= start_date is replaced.
-    sync_sheet(spreadsheet_id, entries, start_date).await?;
+    sync_sheet(spreadsheet_id, entries, start_date, google_auth).await?;
 
     Ok(())
 }
@@ -353,9 +348,14 @@ async fn run_sync_task(toggl_token: &str, spreadsheet_id: &str) -> anyhow::Resul
 #[derive(Debug, Deserialize)]
 struct Settings {
     toggl_api_token: String,
+    #[serde(default = "default_svc_key_file")]
+    google_service_account_key_file: String,
     google_sheets_spreadsheet_id: String,
     #[serde(default = "default_schedule_string")]
     sync_schedule: String,
+}
+fn default_svc_key_file() -> String {
+    "google_private_key.json".to_string()
 }
 fn default_schedule_string() -> String {
     // Run every 30 minutes
@@ -388,14 +388,26 @@ async fn main() -> anyhow::Result<()> {
 
     // Get configuration settings
     let settings = Settings::new().context("settings should exist")?;
+    info!("settings loaded");
 
-    // Print out our settings
-    debug!("{settings:?}");
+    // Print out our settings. NOTE: Contains sensitive stuff.
+    trace!("{settings:?}");
+
+    let google_authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(
+        yup_oauth2::read_service_account_key(settings.google_service_account_key_file)
+            .await
+            .expect("the google service account key file should exist"),
+    )
+    .persist_tokens_to_disk("google_tokencache.json")
+    .build()
+    .await
+    .expect("yup authenticator should succeed");
 
     // Run immediately on startup
     if let Err(e) = run_sync_task(
         &settings.toggl_api_token,
         &settings.google_sheets_spreadsheet_id,
+        google_authenticator.clone(),
     )
     .await
     {
@@ -416,9 +428,13 @@ async fn main() -> anyhow::Result<()> {
                 Box::pin({
                     let toggl_api_token = settings.toggl_api_token.clone();
                     let spreadsheet_id = settings.google_sheets_spreadsheet_id.clone();
+                    let google_authenticator = google_authenticator.clone();
                     async move {
                         info!("Starting scheduled sync...");
-                        if let Err(e) = run_sync_task(&toggl_api_token, &spreadsheet_id).await {
+                        if let Err(e) =
+                            run_sync_task(&toggl_api_token, &spreadsheet_id, google_authenticator)
+                                .await
+                        {
                             error!("Error during scheduled sync: {}", e);
                         }
                         info!("Scheduled sync finished.");
