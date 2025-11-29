@@ -21,7 +21,7 @@ struct TogglTimeEntry {
     stop: Option<DateTime<Utc>>,
     duration: i64,
     project_id: Option<i64>,
-    project_name: Option<serde_json::Value>,
+    project_name: Option<String>,
     tags: Option<Vec<String>>,
 }
 
@@ -272,13 +272,15 @@ async fn sync_sheet(
             serde_json::json!(duration_mins),
             serde_json::json!(entry
                 .project_id
-                .map_or_else(String::new, |id| id.to_string())),
+                .map_or_else(String::default, |id| id.to_string())),
             serde_json::json!(entry.project_name.unwrap_or_default()),
             serde_json::json!(tags_str),
             stop_val,
         ];
         new_rows.push(row);
     }
+
+    debug!("new rows: {:?}", new_rows);
 
     info!("Adding {} new entries.", new_rows.len());
 
