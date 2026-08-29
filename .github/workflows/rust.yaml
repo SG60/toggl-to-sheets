@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: rui314/setup-mold@702b1908b5edf30d71a8d1666b724e0f0c6fa035 # v1
+      - uses: rui314/setup-mold@7e4f20ad28a2e8ca6fd0892ccf72e2abb706b9c3 # v1
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -67,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: rui314/setup-mold@702b1908b5edf30d71a8d1666b724e0f0c6fa035 # v1
+      - uses: rui314/setup-mold@7e4f20ad28a2e8ca6fd0892ccf72e2abb706b9c3 # v1
 
       - uses: dtolnay/rust-toolchain@stable
         with:
